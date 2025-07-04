@@ -10,84 +10,137 @@ plt.rcParams.update({
 })
 
 def loss_fct(y, y_hat):
-    return np.sum((y-y_hat)**2)/np.shape(y)[0]
+    """Compute the cross-entropy loss between true and predicted values."""
+    return np.sum((-y*np.log(y_hat)))/y_hat.shape[-1]
 
-def training_fct(x, p, q):
-    return np.array([np.cos(p/q*x[:,0])*np.cos(x[:,0]), np.cos(p/q*x[:,0])*np.sin(x[:,0])]).T
+def constellation_points():
+    k1 = np.arange(1, M1+1)
+    k2 = np.arange(1, M2+1)
+    k3 = np.arange(1, M3+1)
+    x_1 = np.sin(2*np.pi*k1/M1)
+    x_2 = 2*np.sin(2*np.pi*k2/M2)
+    x_3 = 3*np.sin(2*np.pi*k3/M3)
+    y_1 = -np.cos(2*np.pi*k1/M1)
+    y_2 = -2*np.cos(2*np.pi*k2/M2)
+    y_3 = -3*np.cos(2*np.pi*k3/M3)
+    points = np.array([np.concat(([0], x_1, x_2, x_3)), np.concat(([0], y_1, y_2, y_3))])
+    return np.unique(np.round(points, 14), axis=1)
 
-def norm_input(x):
-    return (x - np.pi)/np.pi
+def training_fct(x):
+    """Generate training data based on input x and parameters p, q."""
+    constellation = constellation_points()
+    # closest constellation point
+    argmins = np.argmin(np.sum((constellation[:,:,np.newaxis]-x[:,np.newaxis])**2,axis=0), axis=0)
+    # reorder unit matrix to get to one-hot representation
+    return np.eye(constellation.shape[1])[argmins]
+
+def norm_input(x, norm):
+    """Normalize input x to the range [-1, 1] based on the norm."""
+    return (x - norm)/norm
 
 def softmax(y, beta=10):
-    return np.exp(beta*y)/np.sum(np.exp(beta*y), axis=1)
+    """Apply the softmax function with temperature beta to input y."""
+    return np.exp(beta*y)/np.sum(np.exp(beta*y), axis=0)
 
 class NeuralNetwork:
-    def __init__(self, N):
+    """Simple feedforward neural network with one hidden layer."""
+    def __init__(self, N, K):
         # hidden layer
         self.A_2 = np.random.normal(0, np.sqrt(2/3), (N,2))
         self.b_2 = np.random.normal(0, np.sqrt(2/3), N)
         # surface layer
-        self.A_1 = np.random.normal(0, np.sqrt(2/3), (2,N))
-        self.b_1 = np.random.normal(0, np.sqrt(2/3), 2)
+        self.A_1 = np.random.normal(0, np.sqrt(2/3), (K,N))
+        self.b_1 = np.random.normal(0, np.sqrt(2/3), K)
+        self.beta1 = 0.9
+        self.beta2 = 0.9
     
     def forward_propagation(self, x):
-        hidden_result = np.tanh((self.A_2@x.T).T + self.b_2[np.newaxis])
-        result = (self.A_1@hidden_result.T).T + self.b_1[np.newaxis]
+        """Perform forward propagation through the network."""
+        hidden_result = np.tanh(self.A_2@x + self.b_2[:,np.newaxis])
+        result = softmax(self.A_1@hidden_result + self.b_1[:,np.newaxis])
         return result, hidden_result
-    
-    def backward_propagation(self, learning_rate, x, h, y, y_hat):
-        loss_grad = -2*(y-y_hat)
-        activation_grad = 1-h**2
-        
-        self.A_2 -= learning_rate*(np.mean((loss_grad@self.A_1), axis=0)*(activation_grad.T@x).T).T
-        self.b_2 -= learning_rate*np.mean((loss_grad@self.A_1)*activation_grad, axis=0)
-        
-        self.A_1 -= learning_rate*loss_grad.T@h/len(x)
-        #learning_rate*(loss_grad@h)
-        self.b_1 -= learning_rate*np.mean(loss_grad, axis=0)
 
-def training(network:NeuralNetwork, learning_rate):
-    x_batches = np.random.uniform(0, np.pi*2, (100,2))
-    y = training_fct(x_batches, P, Q)
-    y_hat, h = network.forward_propagation(norm_input(x_batches))
-    network.backward_propagation(learning_rate, norm_input(x_batches), h, y, y_hat)
+    def adam(self, momentum, v, grad, learning_rate):
+        m_plus = self.beta1*momentum + (1-self.beta1)*grad
+        m_hat = m_plus/(1-self.beta1)
+        v_plus = self.beta2*v + (1-self.beta2)*grad**2
+        v_hat = v_plus/(1-self.beta2)
+        return learning_rate*m_hat/(np.sqrt(v_hat)+1e-8), m_plus, v_plus
+
+    def backward_propagation(self, learning_rate, x, h, y, y_hat):
+        """Update network weights using backpropagation."""
+        loss_grad = y_hat-y
+        activation_grad = 1-h**2
+
+        A_2_grad = (((self.A_1.T@loss_grad)*activation_grad)@x.T)/x.shape[-1]
+        b_2_grad = np.mean((self.A_1.T@loss_grad)*activation_grad, axis=-1)
+        A_1_grad = loss_grad@h.T/x.shape[-1]
+        b_1_grad = np.mean(loss_grad, axis=-1)
+        
+        
+
+        self.A_2 -= learning_rate*A_2_grad
+        self.b_2 -= learning_rate*b_2_grad
+        
+        self.A_1 -= learning_rate*A_1_grad
+        #learning_rate*(loss_grad@h)
+        self.b_1 -= learning_rate*b_1_grad
+
+    def loss(self, validation_set):
+        y = training_fct(validation_set).T
+        pred = self.forward_propagation(norm_input(validation_set, 5.5))[0]
+        network_class = np.argmax(pred, axis=0)
+        true_class = np.argmax(y, axis=0)
+        accurate_class = network_class == true_class
+        print(np.mean(accurate_class))
+        return loss_fct(y, pred)
+
+def training(network:NeuralNetwork, learning_rate, training_set):
+    """Train the network on a batch of randomly generated data."""
+    np.random.shuffle(training_set)
+    setlength = training_set.shape[-1]
+    m = 100
+    for i in range(0, setlength, m):
+        minibatch = training_set[:, i:max(i+m, setlength)]
+        y = training_fct(minibatch).T
+        y_hat, h = network.forward_propagation(norm_input(minibatch, 5.5))
+        network.backward_propagation(learning_rate, norm_input(minibatch, 5.5), h, y, y_hat)
     
 def print_network_params(network:NeuralNetwork):
+    """Print the parameters of the neural network."""
     print(f"A_1: {network.A_1}")
     print(f"b_1: {network.b_1}")
     print(f"A_2: {network.A_2}")
     print(f"b_2: {network.b_2}")
     
-def plot_network(network:NeuralNetwork):
+def plot_functions(x):
+    """Plots the correct assignment of 1000 points to the constellation generated by m1-m3
+
+    Args:
+        x: the set for which the constellation alignment is to be plotted
+    """
+    const_pts = constellation_points()
+    onehot = training_fct(x)
+    fig, ax = plt.subplots()
+    ax.plot(*const_pts, marker="o", ls="")
+    color_indices = np.argmax(onehot, axis=1)
+    ax.scatter(*x, c=color_indices, marker="x", cmap="tab20")
+    return fig, ax
+
+def plot_network(network:NeuralNetwork, val_set):
     """Plotting as required by task. Layout taken from chatGPT"""
-    x_plot = np.linspace(0, 2*np.pi, 200)
-    x_network = np.array([x_plot,np.zeros_like(x_plot)]).T
-    trainingdata = training_fct(x_network, P, Q).T
-    networkdata = network.forward_propagation(norm_input(x_network))[0].T
-    fig = plt.figure(figsize=(8, 4))
-    gs = gridspec.GridSpec(2, 2, width_ratios=[1, 1], height_ratios=[1, 1], wspace=0.15, hspace=0)
-    # Big left plot spanning two rows
-    ax_big = fig.add_subplot(gs[:, 0])  # All rows, first column
-    # Top-right subplot
-    ax_top = fig.add_subplot(gs[0, 1])  # First row, second column
-    # Bottom-right subplot
-    ax_bot = fig.add_subplot(gs[1, 1], sharex=ax_top)  # Second row, second column
-    ax_big.plot(*networkdata, label=r"$\hat{y}(x)$")
-    ax_big.plot(*trainingdata, label=r"$f(x)$")
-    ax_top.plot(x_plot, trainingdata[0], label=r"$f(x)_1$")
-    ax_top.plot(x_plot, networkdata[0], label=r"$\hat{y}(x)_1$")
-    ax_bot.plot(x_plot, trainingdata[1], label=r"$f(x)_2$")
-    ax_bot.plot(x_plot, networkdata[1], label=r"$\hat{y}(x)_2$")
-    ax_bot.set_xlabel("x")
-    ax_big.set_title("(a)")
-    ax_top.set_title("(b)")
-    ax_top.legend(loc="upper center")
-    ax_bot.legend()
-    ax_big.legend()
+    trainingdata = training_fct(val_set)
+    networkdata = network.forward_propagation(norm_input(val_set, 5.5))[0].T
+    # gs = gridspec.GridSpec(2, 2, width_ratios=[1, 1], height_ratios=[1, 1], wspace=0.15, hspace=0
+    fig, ax = plot_functions(val_set)
+    fig2, ax2 = plt.subplots()
+    ax2.scatter(*val_set,c=np.argmax(networkdata, axis=1), cmap="tab20")
     
-P = 4
-Q = 1
-WIDTH = 15
+M1 = 3
+M2 = 3
+M3 = 6
+WIDTH = 12
+epochs = 1000
 
 # Displaying pickled models 
 # with open("network.pkl", "rb") as f:
@@ -100,21 +153,16 @@ WIDTH = 15
 # plt.show()
 # quit()
 
-new_network = NeuralNetwork(WIDTH)
-
-epochs = 2000000
-loss_history = []
-learning_rate = 0.1
-for t in range(epochs):
-    training(new_network, learning_rate)
-    if t % 100 == 0:
-        x_batches = np.random.uniform(0, np.pi*2, (200,2))
-        y_hat, _ = new_network.forward_propagation(norm_input(x_batches))
-        loss = loss_fct(training_fct(x_batches, P, Q), y_hat)
-        loss_history.append(loss)
-plot_network(new_network)
-print(loss_fct(training_fct(x_batches, P, Q), y_hat))
+new_network = NeuralNetwork(WIDTH, K=13)
+training_set = np.random.uniform(-5.5, 5.5, (2, 10000))
+validation_set = np.random.uniform(-5.5, 5.5, (2, 5000))
+for e in range(epochs):
+    training(new_network, 0.01, training_set)
+    if e%10==0:
+        print("val", new_network.loss(validation_set))
+        print("train", new_network.loss(training_set))
+plot_network(new_network, validation_set)
 plt.show()
-# Pickling models
-# with open("network.pkl", "wb") as f:
-#     pickle.dump(new_network, f)
+#Pickling models
+with open("network.pkl", "wb") as f:
+    pickle.dump(new_network, f)
