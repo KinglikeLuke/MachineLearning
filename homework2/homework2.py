@@ -1,5 +1,6 @@
 import pickle
 import numpy as np
+from dataclasses import dataclass
 from matplotlib import pyplot as plt
 import matplotlib.gridspec as gridspec
 
@@ -8,6 +9,12 @@ plt.rcParams.update({
     "font.family": "sans-serif",
     "font.sans-serif": "Helvetica",
 })
+
+@dataclass
+class Weight:
+    w: np.ndarray
+    m_w: np.float64 = 0
+    v_w: np.float64 = 0
 
 def loss_fct(y, y_hat):
     """Compute the cross-entropy loss between true and predicted values."""
@@ -46,45 +53,46 @@ class NeuralNetwork:
     """Simple feedforward neural network with one hidden layer."""
     def __init__(self, N, K):
         # hidden layer
-        self.A_2 = np.random.normal(0, np.sqrt(2/3), (N,2))
-        self.b_2 = np.random.normal(0, np.sqrt(2/3), N)
+        self.A_2 = Weight(np.random.normal(0, np.sqrt(2/3), (N,2)))
+        self.b_2 = Weight(np.random.normal(0, np.sqrt(2/3), N))
         # surface layer
-        self.A_1 = np.random.normal(0, np.sqrt(2/3), (K,N))
-        self.b_1 = np.random.normal(0, np.sqrt(2/3), K)
+        self.A_1 = Weight(np.random.normal(0, np.sqrt(2/3), (K,N)))
+        self.b_1 = Weight(np.random.normal(0, np.sqrt(2/3), K))
         self.beta1 = 0.9
-        self.beta2 = 0.9
+        self.beta2 = 0.999
     
     def forward_propagation(self, x):
         """Perform forward propagation through the network."""
-        hidden_result = np.tanh(self.A_2@x + self.b_2[:,np.newaxis])
-        result = softmax(self.A_1@hidden_result + self.b_1[:,np.newaxis])
+        hidden_result = np.tanh(self.A_2.w@x + self.b_2.w[:,np.newaxis])
+        result = softmax(self.A_1.w@hidden_result + self.b_1.w[:,np.newaxis])
         return result, hidden_result
 
-    def adam(self, momentum, v, grad, learning_rate):
-        m_plus = self.beta1*momentum + (1-self.beta1)*grad
+    def adam(self, weight:Weight, grad, learning_rate):
+        m_plus = self.beta1*weight.m_w + (1-self.beta1)*grad
         m_hat = m_plus/(1-self.beta1)
-        v_plus = self.beta2*v + (1-self.beta2)*grad**2
+        weight.m_w = m_plus
+        v_plus = self.beta2*weight.v_w + (1-self.beta2)*grad**2
         v_hat = v_plus/(1-self.beta2)
-        return learning_rate*m_hat/(np.sqrt(v_hat)+1e-8), m_plus, v_plus
+        weight.v_w = v_plus
+        weight.w -= learning_rate*m_hat/(np.sqrt(v_hat)+1e-8)
 
     def backward_propagation(self, learning_rate, x, h, y, y_hat):
         """Update network weights using backpropagation."""
         loss_grad = y_hat-y
         activation_grad = 1-h**2
 
-        A_2_grad = (((self.A_1.T@loss_grad)*activation_grad)@x.T)/x.shape[-1]
-        b_2_grad = np.mean((self.A_1.T@loss_grad)*activation_grad, axis=-1)
-        A_1_grad = loss_grad@h.T/x.shape[-1]
-        b_1_grad = np.mean(loss_grad, axis=-1)
-        
-        
+        surface_grad = loss_grad
+        hidden_grad = (self.A_1.w.T@loss_grad)*activation_grad
 
-        self.A_2 -= learning_rate*A_2_grad
-        self.b_2 -= learning_rate*b_2_grad
-        
-        self.A_1 -= learning_rate*A_1_grad
-        #learning_rate*(loss_grad@h)
-        self.b_1 -= learning_rate*b_1_grad
+        A_2_grad = (hidden_grad@x.T)/x.shape[-1]
+        b_2_grad = np.mean(hidden_grad, axis=-1)
+        A_1_grad = surface_grad@h.T/x.shape[-1]
+        b_1_grad = np.mean(surface_grad, axis=-1)       
+
+        self.adam(self.A_2, A_2_grad, learning_rate)
+        self.adam(self.b_2, b_2_grad, learning_rate)
+        self.adam(self.A_1, A_1_grad, learning_rate)
+        self.adam(self.b_1, b_1_grad, learning_rate)
 
     def loss(self, validation_set):
         y = training_fct(validation_set).T
@@ -139,8 +147,8 @@ def plot_network(network:NeuralNetwork, val_set):
 M1 = 3
 M2 = 3
 M3 = 6
-WIDTH = 12
-epochs = 1000
+WIDTH = 50
+epochs = 200
 
 # Displaying pickled models 
 # with open("network.pkl", "rb") as f:
@@ -157,7 +165,7 @@ new_network = NeuralNetwork(WIDTH, K=13)
 training_set = np.random.uniform(-5.5, 5.5, (2, 10000))
 validation_set = np.random.uniform(-5.5, 5.5, (2, 5000))
 for e in range(epochs):
-    training(new_network, 0.01, training_set)
+    training(new_network, 0.1, training_set)
     if e%10==0:
         print("val", new_network.loss(validation_set))
         print("train", new_network.loss(training_set))
