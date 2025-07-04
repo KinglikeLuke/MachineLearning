@@ -49,6 +49,9 @@ def softmax(y, beta=10):
     """Apply the softmax function with temperature beta to input y."""
     return np.exp(beta*y)/np.sum(np.exp(beta*y), axis=0)
 
+def relu(x):
+    return x * (x > 0)
+
 class NeuralNetwork:
     """Simple feedforward neural network with one hidden layer."""
     def __init__(self, N, K):
@@ -63,11 +66,18 @@ class NeuralNetwork:
     
     def forward_propagation(self, x):
         """Perform forward propagation through the network."""
-        hidden_result = np.tanh(self.A_2.w@x + self.b_2.w[:,np.newaxis])
+        hidden_result = relu(self.A_2.w@x + self.b_2.w[:,np.newaxis])
         result = softmax(self.A_1.w@hidden_result + self.b_1.w[:,np.newaxis])
         return result, hidden_result
 
     def adam(self, weight:Weight, grad, learning_rate):
+        """Implements adam optimization
+
+        Args:
+            weight (Weight): _description_
+            grad (_type_): _description_
+            learning_rate (_type_): _description_
+        """
         m_plus = self.beta1*weight.m_w + (1-self.beta1)*grad
         m_hat = m_plus/(1-self.beta1)
         weight.m_w = m_plus
@@ -79,7 +89,7 @@ class NeuralNetwork:
     def backward_propagation(self, learning_rate, x, h, y, y_hat):
         """Update network weights using backpropagation."""
         loss_grad = y_hat-y
-        activation_grad = 1-h**2
+        activation_grad = h > 0
 
         surface_grad = loss_grad
         hidden_grad = (self.A_1.w.T@loss_grad)*activation_grad
@@ -87,7 +97,7 @@ class NeuralNetwork:
         A_2_grad = (hidden_grad@x.T)/x.shape[-1]
         b_2_grad = np.mean(hidden_grad, axis=-1)
         A_1_grad = surface_grad@h.T/x.shape[-1]
-        b_1_grad = np.mean(surface_grad, axis=-1)       
+        b_1_grad = np.mean(surface_grad, axis=-1)
 
         self.adam(self.A_2, A_2_grad, learning_rate)
         self.adam(self.b_2, b_2_grad, learning_rate)
@@ -165,7 +175,7 @@ new_network = NeuralNetwork(WIDTH, K=13)
 training_set = np.random.uniform(-5.5, 5.5, (2, 10000))
 validation_set = np.random.uniform(-5.5, 5.5, (2, 5000))
 for e in range(epochs):
-    training(new_network, 0.1, training_set)
+    training(new_network, 0.05, training_set)
     if e%10==0:
         print("val", new_network.loss(validation_set))
         print("train", new_network.loss(training_set))
